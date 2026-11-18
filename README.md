@@ -4,6 +4,14 @@ A small Windows desktop container for Microsoft Teams on the web, built with C#,
 
 The app opens https://teams.cloud.microsoft/ in a dedicated native window. Teams itself remains the hosted web application; this project provides the Windows shell around it rather than implementing a separate Teams client.
 
+## Keep Teams running when your browser restarts
+
+If you cannot sign in to the Teams desktop app but your organization permits Teams on the web, this app gives that web experience its own Windows application, independent of your regular browser's tabs and lifecycle.
+
+Close or restart your browser without closing Teams or interrupting its session. Teams can keep working in this app while your browser restarts, avoiding browser-restart downtime.
+
+The app still depends on network connectivity, Teams availability, and your organization's sign-in policies; it does not bypass access restrictions.
+
 ## What it does
 
 - Hosts Teams in a full-window WebView2 control, without browser tabs or an address bar.
