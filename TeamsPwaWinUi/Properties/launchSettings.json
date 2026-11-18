@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "TeamsPwaWinUi (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "TeamsPwaWinUi (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
