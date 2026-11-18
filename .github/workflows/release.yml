@@ -1,0 +1,134 @@
+name: Package and release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build signed Release package and ZIP
+        id: package
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$manifest = Get-Content -LiteralPath 'TeamsPwaWinUi\Package.appxmanifest'
+          $version = $manifest.Package.Identity.Version
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
+              throw "Release tag must be v$version to match the package manifest."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
+              throw 'Configure WINDOWS_SIGNING_CERTIFICATE_BASE64 before running this workflow.'
+          }
+          if ([string]::IsNullOrEmpty($env:SIGNING_CERTIFICATE_PASSWORD)) {
+              throw 'Configure WINDOWS_SIGNING_CERTIFICATE_PASSWORD for the password-protected PFX.'
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'package-signing.pfx'
+          $packageDirectory = Join-Path $env:RUNNER_TEMP 'app-package'
+          $archive = Join-Path $env:RUNNER_TEMP "TeamsPwaWinUi_${version}_x64.zip"
+          $certificate = $null
+          try {
+              [IO.File]::WriteAllBytes(
+                  $certificatePath,
+                  [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+              $password = ConvertTo-SecureString -String $env:SIGNING_CERTIFICATE_PASSWORD -AsPlainText -Force
+              $certificates = @(Import-PfxCertificate -FilePath $certificatePath `
+                  -CertStoreLocation 'Cert:\CurrentUser\My' -Password $password)
+              $signingCertificates = @($certificates | Where-Object HasPrivateKey)
+              if ($signingCertificates.Count -ne 1) {
+                  throw 'The PFX must contain exactly one signing certificate with a private key.'
+              }
+              $certificate = $signingCertificates[0]
+              if ($certificate.Subject -cne $manifest.Package.Identity.Publisher) {
+                  throw 'The signing certificate subject must match the package manifest publisher.'
+              }
+
+              dotnet build 'TeamsPwaWinUi\TeamsPwaWinUi.csproj' `
+                  -p:Platform=x64 -p:Configuration=Release -p:SelfContained=true `
+                  -p:GenerateAppxPackageOnBuild=true -p:AppxBundle=Never `
+                  -p:AppxAutoIncrementPackageRevision=false `
+                  -p:AppxPackageSigningEnabled=true -p:PackageCertificateKeyFile= `
+                  "-p:PackageCertificateThumbprint=$($certificate.Thumbprint)" `
+                  "-p:AppxPackageDir=$packageDirectory\"
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Release packaging failed with exit code $LASTEXITCODE."
+              }
+
+              $packages = @(Get-ChildItem -LiteralPath $packageDirectory -Recurse `
+                  -Filter "TeamsPwaWinUi_${version}_x64.msix")
+              if ($packages.Count -ne 1) {
+                  throw 'Expected exactly one x64 MSIX package.'
+              }
+              if (Get-ChildItem -LiteralPath $packageDirectory -Recurse -Filter '*.pfx') {
+                  throw 'A private signing key must never be included in release assets.'
+              }
+              Export-Certificate -Cert $certificate `
+                  -FilePath (Join-Path $packages[0].DirectoryName 'SigningCertificate.cer') | Out-Null
+              Compress-Archive -Path "$packageDirectory\*" -DestinationPath $archive
+              "version=$version" >> $env:GITHUB_OUTPUT
+              "archive=$archive" >> $env:GITHUB_OUTPUT
+          }
+          finally {
+              if (Test-Path -LiteralPath $certificatePath) {
+                  Remove-Item -LiteralPath $certificatePath -Force
+              }
+              if ($null -ne $certificate) {
+                  Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force
+              }
+          }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: TeamsPwaWinUi-${{ steps.package.outputs.version }}-x64
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: TeamsPwaWinUi-${{ needs.build.outputs.version }}-x64
+          path: dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/*.zip \
+            --verify-tag --title "$RELEASE_TAG" --generate-notes

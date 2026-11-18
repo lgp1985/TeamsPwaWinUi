@@ -66,6 +66,22 @@ For an in-place update, retain the package identity and publisher, and increment
 
 Packaging may warn that `mspdbcmf.exe` is missing. In the verified builds, this prevented symbols-package generation but did not prevent the Release MSIX from being built and installed.
 
+### GitHub Actions releases
+
+[Package and release](.github/workflows/release.yml) builds a signed x64 Release MSIX and ZIP. A manual run (`workflow_dispatch`) uploads the ZIP as a workflow artifact only. Pushing a tag publishes that ZIP to a GitHub Release.
+
+The build uses `windows-2025`: WinUI's XAML compiler and Windows SDK/MSIX tools require Windows, even though .NET itself runs on Linux. The publishing job uses `ubuntu-latest` and its preinstalled GitHub CLI. The checked runner inventories document [Windows build tools](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md) and Ubuntu's GitHub CLI, PowerShell, .NET, and archive tools ([24.04](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md), [26.04](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2604-Readme.md)); `ubuntu-latest` is transitioning to 26.04 in November 2026. Those Linux tools do not replace the Windows build toolchain.
+
+Before running:
+
+1. Add repository Actions secrets `WINDOWS_SIGNING_CERTIFICATE_BASE64` (the base64-encoded PFX) and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` (its password). Use a password-protected code-signing certificate whose subject exactly matches the manifest publisher. Never commit the PFX, its password, or base64 content.
+2. For updates to an existing installation, retain the package identity/publisher and use the same trusted signing identity. Target machines must trust the signing certificate. CI exports only its public certificate into the ZIP; importing it on a target machine is a separate, deliberate trust decision.
+3. Increment the four-part package version in [Package.appxmanifest](TeamsPwaWinUi/Package.appxmanifest), commit the changes, and push a matching tag, for example `v1.0.4.5` for version `1.0.4.5`. A mismatched tag fails the build. Automatic package revision changes are disabled in CI.
+
+The ZIP contains the generated package directory, including the MSIX, public certificate, and generated dependency/install files. Extract it before running the generated installer or using `Add-AppxPackage`; install required dependencies as well. The ZIP is not a portable executable. Signing uses the supplied certificate without a timestamp service, so renew/re-sign packages as needed before certificate expiry.
+
+Only the publishing job has `contents: write` permission; it uses the built-in `GITHUB_TOKEN`, so no personal access token is required. Repository/organization policies must permit release creation. Release creation fails if the tag already has a release rather than silently replacing published assets.
+
 ## Project layout
 
 - [MainWindow.xaml](TeamsPwaWinUi/MainWindow.xaml): native window, Mica backdrop, and WebView2 control.
