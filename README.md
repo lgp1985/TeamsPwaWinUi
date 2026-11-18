@@ -8,11 +8,15 @@ The app opens https://teams.cloud.microsoft/ in a dedicated native window. Teams
 
 - Hosts Teams in a full-window WebView2 control, without browser tabs or an address bar.
 - Uses a Mica window backdrop on supported Windows versions.
-- Enables Windows-connected accounts in Microsoft's web sign-in flow through WebView2 single sign-on. Sign-in may still be required.
+- Enables WebView2 Windows single sign-on before browser initialization using `AllowSingleSignOnUsingOSPrimaryAccount`. Microsoft controls which Windows-connected accounts appear in its web sign-in flow; sign-in may still be required.
 - Pre-allows WebView2 notifications, window management, microphone, and camera permissions for the Teams and Outlook web origins.
 - Updates the window icon when the hosted page's favicon changes.
 
 Outlook is included in the permission setup, but Teams is the startup page. There is no separate Outlook view or app-switching UI.
+
+### Windows-connected accounts
+
+The Microsoft web account picker was verified to show both configured work accounts with **Connected to Windows** on the development machine. Availability depends on the Windows accounts, WebView2 Runtime, and organizational policies; this is not a guarantee that every account in Windows Settings will appear.
 
 ## Requirements
 
@@ -41,10 +45,26 @@ The project currently references a local development signing certificate. For yo
 From the repository root:
 
 ```powershell
-dotnet build .\TeamsPwaWinUi\TeamsPwaWinUi.csproj -p:Platform=x64 -p:AppxPackageSigningEnabled=false
+dotnet build .\TeamsPwaWinUi\TeamsPwaWinUi.csproj -p:Platform=x64 -p:Configuration=Release -p:AppxPackageSigningEnabled=false
 ```
 
-This restores dependencies and builds the application without package signing. It does not install or launch the app, or produce a trusted, signed installer.
+This restores dependencies and builds the Release configuration without package signing. It does not install or launch the app, or produce a trusted, signed installer. Use Debug for debugging; use Release for normal use. Release publishing enables ReadyToRun and trimming in the current project settings.
+
+Pass `-p:Platform=x64` explicitly when building from the command line or VS Code to avoid selecting an incompatible solution platform.
+
+### Package and update the installed app
+
+After configuring a trusted signing certificate and matching package publisher:
+
+```powershell
+dotnet build .\TeamsPwaWinUi\TeamsPwaWinUi.csproj -p:Platform=x64 -p:Configuration=Release -p:GenerateAppxPackageOnBuild=true -p:AppxBundle=Never
+```
+
+The signed MSIX is generated under [TeamsPwaWinUi/AppPackages](TeamsPwaWinUi/AppPackages), in a versioned folder. Close the running app and install the generated Release package with `Add-AppxPackage -Path '<path-to-generated.msix>'`. The signing certificate must be trusted and required package dependencies must be installed on the target machine.
+
+For an in-place update, retain the package identity and publisher, and increment the version in [Package.appxmanifest](TeamsPwaWinUi/Package.appxmanifest) before packaging. Windows rejects changed package contents with the same installed version. Updating in place preserves app data; the existing sign-in session was verified to survive the updates performed during development.
+
+Packaging may warn that `mspdbcmf.exe` is missing. In the verified builds, this prevented symbols-package generation but did not prevent the Release MSIX from being built and installed.
 
 ## Project layout
 
